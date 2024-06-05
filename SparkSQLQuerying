@@ -1,0 +1,27 @@
+#Create dataframe as temp view using SQL. 
+
+ df.createOrReplaceTempView("salesorders")
+
+ spark_df = spark.sql("SELECT * FROM salesorders")
+ display(spark_df)
+
+
+#Run SQL code in a cell
+ %%sql
+ SELECT YEAR(OrderDate) AS OrderYear,
+        SUM((UnitPrice * Quantity) + Tax) AS GrossRevenue
+ FROM salesorders
+ GROUP BY YEAR(OrderDate)
+ ORDER BY OrderYear;
+
+#https://spark.apache.org/docs/2.2.0/sql-programming-guide.html
+
+#Spark df output using SQL
+
+ sqlQuery = "SELECT CAST(YEAR(OrderDate) AS CHAR(4)) AS OrderYear, \
+                 SUM((UnitPrice * Quantity) + Tax) AS GrossRevenue \
+             FROM salesorders \
+             GROUP BY CAST(YEAR(OrderDate) AS CHAR(4)) \
+             ORDER BY OrderYear"
+ df_spark = spark.sql(sqlQuery)
+ df_spark.show()
