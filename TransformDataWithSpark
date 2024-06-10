@@ -1,0 +1,106 @@
+#TRANSFORMING DATA IN SPARK
+#	By using a Spark dataframe object, you can load data files in a data lake and perform complex modifications and then save transformed data back to the data lake for downstream processing or ingestion to a data warehouse.
+# Azure Synapse provides Apache Spark sppols to run Spark workloads
+# Can use Apache Spark pools to run Spark workloads
+# Can use SQL pools to work with transformed data
+
+
+#MODIFY AND SAVE DF'S
+#To load data into a dataframe use spark.read function, specifying file format, path, and optionally schema
+
+#Load all data from all .csv files in the orders folder into a DF named order_details and display first 5 records
+order_details = spark.read.csv('/orders/*.csv', header=True, inferSchema=True)
+display(order_details.limit(5))
+
+#TRANSFORM THE DATA STRUCTURE
+
+# Use split function to separate the values in CustomerName into two new columns Firstname and LastName
+# Use drop method to delete the original customer name column
+from pyspark.sql.functions import split, col
+
+# Create the new FirstName and LastName fields
+transformed_df = order_details.withColumn("FirstName", split(col("CustomerName"), " ").getItem(0)).withColumn("LastName", split(col("CustomerName"), " ").getItem(1))
+
+# Remove the CustomerName field
+transformed_df = transformed_df.drop("CustomerName")
+
+display(transformed_df.limit(5))
+
+#SAVE THE TRANSFORMED DATA
+#Save the DF into a parquet file in the data lake, replacing any existing file of the same name
+transformed_df.write.mode("overwrite").parquet('/transformed_data/orders.parquet')
+print ("Transformed data saved!")
+
+#NOTE: Parquet file is typicaly preferred for data files that you will use for futher analysis or ingestion in the analytical store.
+
+#PARTITION DATA FILES
+#Partitioning is an optimization technique that enables spark to maximize performance across worker nodes
+#More performance gains can be achieved when filtering data in queries by eliminating unnecessary disk IO
+
+# To save a DF as a partitioned set of files, use the partitionBy method when writing the data
+#Create a dervied Year field, then use it to partition data
+#Folder names generated when partitioning a DF include the partitioning col and value as col=value
+#e.g. data folder --> drill down to folders Year=2020, Year=2021
+from pyspark.sql.functions import year, col
+
+# Load source data
+df = spark.read.csv('/orders/*.csv', header=True, inferSchema=True)
+
+# Add Year column
+dated_df = df.withColumn("Year", year(col("OrderDate")))
+
+# Partition by year
+dated_df.write.partitionBy("Year").mode("overwrite").parquet("/data")
+
+#NOTE: Can partition data by multiple columns, which results in a hierarchy of folders for each key
+# e.g. Parition the order by year and month, so the folder includes a folder for each year value and a subfolder for each month value
+
+# FILTER PARQUET FILES IN  A QUERY
+#Pull sales orders placed in 2020
+#NOTE: paritioning columns specified in file path are omitted from DF
+orders_2020 = spark.read.parquet('/partitioned_data/Year=2020')
+display(orders_2020.limit(5))
+
+#TRANSFORM DATA WITH SQL
+
+# SparkSQL library provides the DF structure and allows use of SQL, persists results as tables
+# NOTE: Tables are metadata abstractions over files. Data is not stored in a relational table but provides relational layer over files in the data lake
+
+# DEFINE TABLES AND VIEWS
+# Table definitions in Spark are stored in a metastore (relational abstractions over files)
+# External tables are relational tables in a metastore that referene files in a data lake location that you specify
+# Can access the data by querying the table or reading the files directly from the lake
+# NOTE: External table are "loosely bound" to the underlying files. Deleting the table does not delete the files
+      # This allows use of Spark for heavy lifting of transformation then persist the data in the lake
+      # After this is done you can drop the table and downstream processes can access the optimized structures
+      # Can also define "managed" tables for which underlying data files are stored in an internally managed storage location associated with the metastore
+      # Managed tables are "tightly-bound" to the files and deletion would delete associated files
+
+# Save DF (loaded by CSV Files_ as an external table name sales_order and store i the /sales_orders_table folder
+order_details.write.saveAsTable('sales_orders', format='parquet', mode='overwrite', path='/sales_orders_table')
+
+# USE SQL TO QUERY AND TRANSFORM THE DATA
+# After defining a table can use SQL to query/transform
+
+#Create two new derived columns (Year and Month) and then create new table transformed_orders
+# Create derived columns
+sql_transform = spark.sql("SELECT *, YEAR(OrderDate) AS Year, MONTH(OrderDate) AS Month FROM sales_orders")
+
+# Save the results
+sql_transform.write.partitionBy("Year","Month").saveAsTable('transformed_orders', format='parquet', mode='overwrite', path='/transformed_orders_table')
+# Data files for the new table are stored in a hierchy of folders with the format of Year=*NNNN*/Month = *N* in parquet format
+
+#QUERY THE METASTORE
+# Since new table created in metastore, can use SQL to query it directly with  %%sql magic key in first line
+%%sql
+
+SELECT * FROM transformed_orders
+WHERE Year = 2021
+    AND Month = 1
+
+#DROP TABLES
+# With external tables it won't delete the files in data lake. Enables ability to clean up metastore adter using SQL to transform the data while making transformed data files available downstream still
+%%sql
+
+DROP TABLE transformed_orders;
+DROP TABLE sales_orders;
